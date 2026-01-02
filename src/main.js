@@ -433,7 +433,17 @@ async function runBrowserFallback({ startUrl, proxyConfiguration, maxLawyers, ma
             await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 
             const html = await page.content();
-            const lawyers = extractListingViaHtml({ html, pageUrl: request.url });
+            
+            // Try extraction methods in priority order
+            let lawyers = [];
+            
+            // 1) Try embedded JSON first
+            lawyers = extractListingViaEmbeddedJson({ html, pageUrl: request.url });
+            
+            // 2) Fallback to HTML parsing
+            if (!lawyers.length) {
+                lawyers = extractListingViaHtml({ html, pageUrl: request.url });
+            }
 
             const filtered = lawyers.filter((l) => {
                 if (!l.website) return false;
@@ -443,7 +453,14 @@ async function runBrowserFallback({ startUrl, proxyConfiguration, maxLawyers, ma
             });
 
             const slice = maxLawyers > 0 ? filtered.slice(0, Math.max(0, maxLawyers - seen.size + filtered.length)) : filtered;
-            if (slice.length) await Actor.pushData(slice);
+            if (slice.length) {
+                await Actor.pushData(slice);
+                log.info('Browser fallback saved lawyers', {
+                    savedThisPage: slice.length,
+                    totalScraped: seen.size,
+                    url: request.url,
+                });
+            }
 
             if (maxLawyers > 0 && seen.size >= maxLawyers) return;
 
@@ -511,7 +528,15 @@ try {
         else consecutiveBlocked = 0;
 
         if (blocked) {
-            log.warning(`HTTP fetch looks blocked (status ${r.statusCode})`, { url: nextUrl });
+            log.warning(`HTTP fetch looks blocked (status ${r.statusCode}), switching to browser fallback`, { url: nextUrl });
+            // Immediately switch to browser fallback when blocked
+            await runBrowserFallback({
+                startUrl: nextUrl,
+                proxyConfiguration,
+                maxLawyers: maxLawyers > 0 ? Math.max(0, maxLawyers - totalScraped) : 0,
+                maxPages: maxPages > 0 ? Math.max(0, maxPages - pagesProcessed) : 0,
+            });
+            break;
         }
 
         let lawyers = [];
@@ -614,16 +639,6 @@ try {
         const next = findNextPageUrl({ html: r.body, pageUrl: r.url });
         nextUrl = next || '';
 
-        // If we’re repeatedly blocked, use browser fallback to salvage the run.
-        if (consecutiveBlocked >= 2) {
-            await runBrowserFallback({
-                startUrl: nextUrl || searchUrl,
-                proxyConfiguration,
-                maxLawyers: maxLawyers || 0,
-                maxPages: maxPages || 5,
-            });
-            break;
-        }
 
         if (!nextUrl) break;
     }
