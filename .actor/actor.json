@@ -1,0 +1,21 @@
+{
+    "actorSpecification": 1,
+    "name": "justia-lawyer-scraper",
+    "title": "Justia Lawyer Scraper",
+    "description": "Extract lawyer and attorney profiles from Justia.com with comprehensive search filters. Get detailed lawyer data including names, practice areas, contact information, locations, firm details, bar admissions, education, and professional credentials. Perfect for legal research, client sourcing, and attorney directory building.",
+    "version": "1.0",
+    "categories": [
+        "BUSINESS",
+        "SEARCH"
+    ],
+    "meta": {
+        "templateId": "justia-lawyer-scraper",
+        "generatedBy": "GPT-5.2"
+    },
+    "input": "./input_schema.json",
+    "output": "./output_schema.json",
+    "storages": {
+        "dataset": "./dataset_schema.json"
+    },
+    "dockerfile": "../Dockerfile"
+}

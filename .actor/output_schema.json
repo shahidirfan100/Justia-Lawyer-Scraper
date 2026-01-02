@@ -1,0 +1,30 @@
+{
+    "actorOutputSchemaVersion": 1,
+    "title": "Justia Lawyer Scraper Output",
+    "properties": {
+        "lawyers": {
+            "type": "string",
+            "title": "Lawyer Profiles",
+            "description": "Complete lawyer profiles with all details",
+            "template": "{{links.apiDefaultDatasetUrl}}/items?view=overview"
+        },
+        "lawyersCSV": {
+            "type": "string",
+            "title": "Download as CSV",
+            "description": "Export lawyers in CSV format",
+            "template": "{{links.apiDefaultDatasetUrl}}/items?format=csv"
+        },
+        "lawyersJSON": {
+            "type": "string",
+            "title": "Download as JSON",
+            "description": "Export lawyers in JSON format",
+            "template": "{{links.apiDefaultDatasetUrl}}/items?format=json"
+        },
+        "statistics": {
+            "type": "string",
+            "title": "Statistics",
+            "description": "Scraping statistics and summary",
+            "template": "{{links.apiDefaultKeyValueStoreUrl}}/keys/statistics"
+        }
+    }
+}

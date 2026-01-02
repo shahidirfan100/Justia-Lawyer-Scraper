@@ -1,0 +1,62 @@
+{
+    "title": "Justia Lawyer Scraper Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "searchUrl": {
+            "title": "Search URL (Optional)",
+            "type": "string",
+            "description": "Direct Justia search URL to scrape from. If provided, other search parameters will be ignored. Example: https://www.justia.com/lawyers/criminal-law/california",
+            "editor": "textfield",
+            "prefill": "https://www.justia.com/lawyers/criminal-law/california"
+        },
+        "practiceArea": {
+            "title": "Practice Area",
+            "type": "string",
+            "description": "Legal practice area to search for (e.g., 'criminal-law', 'family-law', 'personal-injury', 'business-law'). Use hyphens to separate words. Required if searchUrl is not provided.",
+            "editor": "textfield",
+            "default": "criminal-law",
+            "prefill": "criminal-law"
+        },
+        "location": {
+            "title": "Location",
+            "type": "string",
+            "description": "State or city to search for lawyers (e.g., 'california', 'new-york', 'texas'). Use hyphens to separate words. Required if searchUrl is not provided.",
+            "editor": "textfield",
+            "default": "california",
+            "prefill": "california"
+        },
+        "maxLawyers": {
+            "title": "Maximum Lawyers",
+            "type": "integer",
+            "description": "Maximum number of lawyer profiles to scrape (0 = unlimited). Default is 50 for optimal performance.",
+            "default": 50,
+            "minimum": 0,
+            "maximum": 10000
+        },
+        "maxPages": {
+            "title": "Maximum Pages",
+            "type": "integer",
+            "description": "Safety cap for pagination (0 = unlimited). Helps prevent runaway crawls.",
+            "default": 5,
+            "minimum": 0,
+            "maximum": 1000
+        },
+        "fetchFullProfiles": {
+            "title": "Fetch Full Profiles",
+            "type": "boolean",
+            "description": "Whether to visit each lawyer's detail page to extract additional information (biography, education, bar admissions, languages). This will increase scraping time but provides more comprehensive data.",
+            "default": false
+        },
+        "proxyConfiguration": {
+            "title": "Proxy Configuration",
+            "type": "object",
+            "description": "Proxy settings for bypassing anti-bot protection. Recommended for reliable scraping.",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": true
+            }
+        }
+    },
+    "required": []
+}
