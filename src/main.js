@@ -192,6 +192,7 @@ function extractListingViaEmbeddedJson({ html, pageUrl }) {
     // Fallback: parse embedded JSON blobs from scripts.
     const $ = cheerio.load(html);
     const scripts = $('script:not([src])');
+    log.debug(`Embedded JSON: checking ${scripts.length} script tags`);
 
     for (const el of scripts.toArray()) {
         const text = ($(el).text() || '').trim();
@@ -233,13 +234,17 @@ function findBestCardContainer($, $a) {
 
 function isLikelyProfileHref(href) {
     if (!href) return false;
-    // Heuristic: profiles usually include an id-like suffix.
-    // Examples often look like /lawyers/state/city/name-12345
-    return /\/lawyers\//.test(href) && /\d{3,}/.test(href);
+    // Accept any /lawyers/ link that has at least 3 path segments
+    // Examples: /lawyers/john-doe-123456 or /lawyers/state/city/name
+    const parts = href.split('/').filter(p => p);
+    return /\/lawyers\//.test(href) && parts.length >= 2;
 }
 
 function extractListingViaHtml({ html, pageUrl }) {
     const $ = cheerio.load(html);
+
+    const allLawyerLinks = $('a[href^="/lawyers/"]').length;
+    log.debug(`HTML extraction: found ${allLawyerLinks} total lawyer links`);
 
     const candidates = [];
     $('a[href^="/lawyers/"]').each((_, el) => {
@@ -298,6 +303,8 @@ function extractListingViaHtml({ html, pageUrl }) {
         seen.add(key);
         return true;
     });
+
+    log.debug(`HTML extraction: ${candidates.length} candidates, ${lawyers.length} unique lawyers`);
 
     return lawyers;
 }
@@ -459,6 +466,12 @@ async function runBrowserFallback({ startUrl, proxyConfiguration, maxLawyers, ma
                     savedThisPage: slice.length,
                     totalScraped: seen.size,
                     url: request.url,
+                });
+            } else {
+                log.warning('Browser fallback found no lawyers on page', {
+                    url: request.url,
+                    candidatesFound: lawyers.length,
+                    lawyerLinks: cheerio.load(html)('a[href^="/lawyers/"]').length,
                 });
             }
 
