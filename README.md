@@ -2,12 +2,11 @@
 
 Extract lawyer and attorney profiles from Justia.com and export them as structured data.
 
-This Actor is built for fast, production scraping with a resilient extraction strategy:
+This Actor uses **Playwright + Camoufox** for maximum stealth and reliability, bypassing anti-bot protection with a resilient extraction strategy:
 
-1. JSON endpoints (HTTP + JSON parse)
-2. Embedded JSON data (HTTP + JSON parse)
-3. HTML parsing (HTTP + HTML parse)
-4. Browser fallback only when needed
+1. **JSON-LD Structured Data** (Browser + JSON parse) — fastest & most reliable
+2. **Embedded JSON** (Browser + JSON parse from scripts)
+3. **HTML Parsing** (Browser + HTML parse) — fallback only
 
 ## What it extracts
 
@@ -34,8 +33,8 @@ Each result can include (availability depends on the public profile):
 {
   "practiceArea": "criminal-law",
   "location": "california",
-  "maxLawyers": 50,
-  "maxPages": 5,
+  "maxLawyers": 100,
+  "maxPages": 10,
   "fetchFullProfiles": false,
   "proxyConfiguration": { "useApifyProxy": true }
 }
@@ -46,8 +45,8 @@ Each result can include (availability depends on the public profile):
 ```json
 {
   "searchUrl": "https://www.justia.com/lawyers/criminal-law/california",
-  "maxLawyers": 50,
-  "maxPages": 5,
+  "maxLawyers": 100,
+  "maxPages": 10,
   "fetchFullProfiles": false,
   "proxyConfiguration": { "useApifyProxy": true }
 }
@@ -61,9 +60,11 @@ Each result can include (availability depends on the public profile):
   "maxLawyers": 50,
   "maxPages": 5,
   "fetchFullProfiles": true,
+  "debug": false,
   "proxyConfiguration": { "useApifyProxy": true }
 }
 ```
+
 
 ## Input
 
@@ -73,14 +74,12 @@ Each result can include (availability depends on the public profile):
   - Use a slug format such as `criminal-law`, `family-law`, `personal-injury`.
 - `location` (string, required when `searchUrl` is not provided)
   - Use a slug format such as `california`, `new-york`, `texas`.
-- `maxLawyers` (number, default: `50`)
+- `maxLawyers` (number, default: `100`)
   - Maximum number of profiles to store. Use `0` for unlimited.
-- `maxPages` (number, default: `5`)
+- `maxPages` (number, default: `10`)
   - Maximum number of listing pages to process. Use `0` for unlimited.
 - `fetchFullProfiles` (boolean, default: `false`)
   - If enabled, the Actor visits each lawyer profile page and attempts to extract extra fields.
-- `useSitemap` (boolean, default: `false`)
-  - Reserved for sitemap-based discovery; if enabled, the Actor will attempt it and fall back automatically.
 - `debug` (boolean, default: `false`)
   - If enabled, saves diagnostic snapshots to the key-value store when a page returns 0 extracted items.
 - `proxyConfiguration` (object, recommended)

@@ -1,9 +1,10 @@
 {
   "practiceArea": "criminal-law",
   "location": "california",
-  "maxLawyers": 50,
-  "maxPages": 5,
+  "maxLawyers": 100,
+  "maxPages": 10,
   "fetchFullProfiles": false,
+  "debug": false,
   "proxyConfiguration": {
     "useApifyProxy": true
   }

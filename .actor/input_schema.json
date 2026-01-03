@@ -29,8 +29,8 @@
         "maxLawyers": {
             "title": "Maximum Lawyers",
             "type": "integer",
-            "description": "Maximum number of lawyer profiles to scrape (0 = unlimited). Default is 50 for optimal performance.",
-            "default": 50,
+            "description": "Maximum number of lawyer profiles to scrape (0 = unlimited).",
+            "default": 100,
             "minimum": 0,
             "maximum": 10000
         },
@@ -38,7 +38,7 @@
             "title": "Maximum Pages",
             "type": "integer",
             "description": "Safety cap for pagination (0 = unlimited). Helps prevent runaway crawls.",
-            "default": 5,
+            "default": 10,
             "minimum": 0,
             "maximum": 1000
         },
@@ -46,6 +46,12 @@
             "title": "Fetch Full Profiles",
             "type": "boolean",
             "description": "Whether to visit each lawyer's detail page to extract additional information (biography, education, bar admissions, languages). This will increase scraping time but provides more comprehensive data.",
+            "default": false
+        },
+        "debug": {
+            "title": "Debug Mode",
+            "type": "boolean",
+            "description": "Enable debug mode to save diagnostic snapshots when pages return 0 results. Useful for troubleshooting extraction issues.",
             "default": false
         },
         "proxyConfiguration": {
