@@ -2,11 +2,10 @@
 
 Extract lawyer and attorney profiles from Justia.com and export them as structured data.
 
-This Actor uses **Playwright + Camoufox** for maximum stealth and reliability, bypassing anti-bot protection with a resilient extraction strategy:
+This Actor uses **Playwright + Camoufox** for maximum stealth and reliability, bypassing anti-bot protection with a simple, fast extraction strategy:
 
-1. **JSON-LD Structured Data** (Browser + JSON parse) — fastest & most reliable
-2. **Embedded JSON** (Browser + JSON parse from scripts)
-3. **HTML Parsing** (Browser + HTML parse) — fallback only
+1. **JSON-LD Structured Data** (Browser + JSON parse) — primary method
+2. **HTML Parsing** (Browser + HTML parse) — fallback only
 
 ## What it extracts
 

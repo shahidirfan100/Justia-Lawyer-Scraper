@@ -63,17 +63,33 @@ function extractLawyersFromJsonLd(data, pageUrl) {
     for (const item of items) {
         if (!item || typeof item !== 'object') continue;
 
+        // Check for ItemList schema (common for listing pages)
+        if (item['@type'] === 'ItemList' && item.itemListElement) {
+            const listItems = Array.isArray(item.itemListElement) ? item.itemListElement : [item.itemListElement];
+            for (const listItem of listItems) {
+                const nestedItem = listItem.item || listItem;
+                if (nestedItem) {
+                    const extracted = extractLawyersFromJsonLd(nestedItem, pageUrl);
+                    results.push(...extracted);
+                }
+            }
+            continue;
+        }
+
         // Check if this is a lawyer/attorney/person entity
         const type = item['@type'] || '';
         const isLawyer =
             type.includes('Attorney') ||
             type.includes('Lawyer') ||
             type.includes('Person') ||
-            type.includes('LegalService');
+            type.includes('LegalService') ||
+            type.includes('Organization');
 
         if (!isLawyer && !item.name) continue;
 
         const name = item.name || item.givenName || '';
+        if (!name) continue; // Skip if no name
+
         const profileUrl = absoluteUrl(item.url || item['@id'] || '', pageUrl);
 
         // Extract practice areas
@@ -123,76 +139,6 @@ function extractLawyersFromJsonLd(data, pageUrl) {
     return results;
 }
 
-// Extract lawyers from generic JSON object (for intercepted API responses)
-function extractLawyersFromJsonObject(root, pageUrl) {
-    const results = [];
-    const stack = [root];
-    const visited = new Set();
-
-    while (stack.length) {
-        const node = stack.pop();
-        if (!node || typeof node !== 'object') continue;
-        if (visited.has(node)) continue;
-        visited.add(node);
-
-        // Common patterns for lawyer arrays
-        const arraysToCheck = [
-            node.lawyers,
-            node.attorneys,
-            node.results,
-            node.items,
-            node.data?.lawyers,
-            node.data?.attorneys,
-            node.data?.results,
-            node.profiles,
-        ].filter(Boolean);
-
-        for (const arr of arraysToCheck) {
-            if (!Array.isArray(arr)) continue;
-            for (const item of arr) {
-                const name = item?.name || item?.fullName || item?.title || '';
-                const profileUrl = item?.url || item?.profileUrl || item?.link || '';
-                const absoluteProfileUrl = absoluteUrl(profileUrl, pageUrl);
-
-                if (!name && !absoluteProfileUrl) continue;
-
-                results.push({
-                    name: name || 'Unknown Name',
-                    firmName: item?.firmName || item?.firm || item?.organization?.name || '',
-                    location: item?.location || item?.city || item?.region || '',
-                    address: item?.address || '',
-                    phone: item?.phone || item?.telephone || '',
-                    email: item?.email || '',
-                    website: absoluteProfileUrl,
-                    practiceAreas: Array.isArray(item?.practiceAreas)
-                        ? item.practiceAreas.join(', ')
-                        : (item?.practiceAreas || item?.specialties || ''),
-                    description: item?.description || item?.bio || '',
-                    yearsLicensed: item?.yearsLicensed || item?.licensedSince || '',
-                    biography: null,
-                    education: null,
-                    barAdmissions: null,
-                    languages: null,
-                    scrapedAt: new Date().toISOString(),
-                });
-            }
-        }
-
-        // Traverse children
-        for (const value of Object.values(node)) {
-            if (value && typeof value === 'object') stack.push(value);
-        }
-    }
-
-    // De-dup by website
-    const seen = new Set();
-    return results.filter((r) => {
-        const key = r.website || `${r.name}|${r.location}|${r.firmName}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-}
 
 // Extract lawyers from HTML
 function extractListingViaHtml({ html, pageUrl }) {
@@ -389,7 +335,6 @@ try {
     const seenWebsites = new Set();
     let totalScraped = 0;
     let pagesProcessed = 0;
-    const interceptedApis = new Set();
 
     const crawler = new PlaywrightCrawler({
         proxyConfiguration,
@@ -420,19 +365,6 @@ try {
 
         async requestHandler({ page, request, crawler: selfCrawler }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
-
-            // Set up API interception
-            await page.route('**/*', async (route) => {
-                const url = route.request().url();
-
-                // Check if this is a JSON API endpoint
-                if (url.includes('.json') || url.includes('/api/')) {
-                    interceptedApis.add(url);
-                    log.info('Intercepted API endpoint:', url);
-                }
-
-                await route.continue();
-            });
 
             // Navigate with stealth optimizations
             await page.setExtraHTTPHeaders({
@@ -468,53 +400,7 @@ try {
                 }
             }
 
-            // Priority 2: Check intercepted API responses
-            if (!lawyers.length && interceptedApis.size > 0) {
-                log.debug('No JSON-LD found, checking intercepted APIs');
-                // Note: In a real implementation, you'd need to capture and parse API responses
-                // This is a placeholder for the interception logic
-            }
-
-            // Priority 3: Embedded JSON in script tags
-            if (!lawyers.length) {
-                const scripts = await page.$$('script:not([src])');
-                for (const script of scripts) {
-                    const text = await script.textContent();
-                    if (!text) continue;
-
-                    const lower = text.toLowerCase();
-                    if (!lower.includes('lawyer') && !lower.includes('attorney')) continue;
-
-                    // Try parsing as JSON
-                    const direct = safeJsonParse(text);
-                    if (direct) {
-                        const extracted = extractLawyersFromJsonObject(direct, request.url);
-                        if (extracted.length > 0) {
-                            lawyers = extracted;
-                            extractionMethod = 'Embedded JSON';
-                            log.info(`Extracted ${lawyers.length} lawyers via embedded JSON`);
-                            break;
-                        }
-                    }
-
-                    // Try extracting JSON substring
-                    const match = text.match(/\{[\s\S]*\}/);
-                    if (match) {
-                        const parsed = safeJsonParse(match[0]);
-                        if (parsed) {
-                            const extracted = extractLawyersFromJsonObject(parsed, request.url);
-                            if (extracted.length > 0) {
-                                lawyers = extracted;
-                                extractionMethod = 'Embedded JSON (substring)';
-                                log.info(`Extracted ${lawyers.length} lawyers via embedded JSON substring`);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Priority 4: HTML Parsing (fallback)
+            // Priority 2: HTML Parsing (fallback)
             if (!lawyers.length) {
                 lawyers = extractListingViaHtml({ html, pageUrl: request.url });
                 if (lawyers.length) {
@@ -523,15 +409,35 @@ try {
                 }
             }
 
+            // Debug logging before filtering
+            if (debug && lawyers.length > 0) {
+                log.debug('Raw extracted lawyers:', {
+                    count: lawyers.length,
+                    sample: lawyers[0],
+                    hasWebsites: lawyers.filter(l => l.website).length,
+                });
+            }
+
             // Filter duplicates and apply limits
             const unique = [];
+            let filtered = 0;
             for (const lawyer of lawyers) {
-                if (!lawyer.website || seenWebsites.has(lawyer.website)) continue;
+                // Generate dedup key: use website if available, otherwise use name+location
+                const dedupKey = lawyer.website || `${lawyer.name}|${lawyer.location}|${lawyer.firmName}`;
+
+                if (seenWebsites.has(dedupKey)) {
+                    filtered++;
+                    continue;
+                }
                 if (maxLawyers > 0 && totalScraped >= maxLawyers) break;
 
-                seenWebsites.add(lawyer.website);
+                seenWebsites.add(dedupKey);
                 unique.push(lawyer);
                 totalScraped++;
+            }
+
+            if (debug && filtered > 0) {
+                log.debug(`Filtered out ${filtered} duplicate lawyers`);
             }
 
             // Enrich with full profiles if requested
@@ -561,6 +467,7 @@ try {
                 savedThisPage: unique.length,
                 totalScraped,
                 extractionMethod,
+                extractedBeforeFilter: lawyers.length,
             });
 
             // Save debug snapshot if no lawyers found
@@ -571,7 +478,6 @@ try {
                         url: request.url,
                         title: await page.title(),
                         htmlSnippet: html.slice(0, 5000),
-                        interceptedApis: [...interceptedApis],
                         timestamp: new Date().toISOString(),
                     },
                     { contentType: 'application/json' }
@@ -609,7 +515,6 @@ try {
     const stats = {
         totalLawyersScraped: totalScraped,
         pagesProcessed,
-        interceptedApis: [...interceptedApis],
         timestamp: new Date().toISOString(),
     };
 
