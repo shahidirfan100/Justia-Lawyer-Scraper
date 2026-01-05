@@ -629,30 +629,33 @@ try {
         maxConcurrency: 10,
         requestHandlerTimeoutSecs: 180,
         maxRequestRetries: 4,
-        ignoreHttpStatusCode: true,
-        retryOnBlocked: false,
-        blockedStatusCodes: [],
         useSessionPool: true,
         persistCookiesPerSession: true,
         sessionPoolOptions: {
+            blockedStatusCodes: [],
             sessionOptions: {
                 maxUsageCount: 20,
             },
         },
         preNavigationHooks: [
-            ({ request }) => {
-                request.headers = {
-                    ...(request.headers || {}),
+            (_ctx, gotOptions) => {
+                gotOptions.headers = {
+                    ...(gotOptions.headers || {}),
                     ...buildHeaders(),
                 };
             },
         ],
 
-        async requestHandler({ request, $, response, crawler: selfCrawler, session }) {
+        async requestHandler({ request, $, response, body, crawler: selfCrawler, session }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
             const headers = buildHeaders();
-            const htmlSnapshot = response?.body?.toString() || $.html() || '';
+            const htmlSnapshot =
+                typeof body === 'string'
+                    ? body
+                    : body
+                        ? body.toString()
+                        : $.html() || '';
             const statusCode = response?.statusCode;
             const blocked = statusCode === 403 || isBlockedHtml(htmlSnapshot);
 
