@@ -53,6 +53,18 @@ function safeJsonParse(text) {
     }
 }
 
+function isBlockedHtml(html) {
+    if (!html) return false;
+    const lower = html.toLowerCase();
+    return (
+        lower.includes('just a moment') ||
+        lower.includes('verify you are human') ||
+        lower.includes('cf-browser-verification') ||
+        lower.includes('access denied') ||
+        lower.includes('security of your connection')
+    );
+}
+
 // Extract lawyers from arbitrary API-like JSON payloads (Next.js data, internal APIs)
 function extractLawyersFromApiPayload(payload, pageUrl) {
     const results = [];
@@ -603,7 +615,7 @@ try {
                 'User-Agent': userAgent,
             };
 
-            const proxyUrl = await proxyConfiguration.newUrl();
+            const proxyUrl = await proxyConfiguration.newUrl().catch(() => null);
 
             let lawyers = [];
             const extractionSources = new Set();
@@ -618,7 +630,24 @@ try {
                     timeout: { request: 45000 },
                 });
                 htmlSnapshot = httpResponse.body?.toString() || '';
+            } catch (err) {
+                log.warning(`HTTP fetch failed (proxy) for ${request.url}: ${err.message}`);
+                if (proxyUrl) {
+                    try {
+                        const httpResponseNoProxy = await gotScraping({
+                            url: request.url,
+                            headers: commonHeaders,
+                            timeout: { request: 45000 },
+                        });
+                        htmlSnapshot = httpResponseNoProxy.body?.toString() || '';
+                        log.info('HTTP fetch without proxy succeeded after proxy failure');
+                    } catch (err2) {
+                        log.warning(`HTTP fetch failed without proxy for ${request.url}: ${err2.message}`);
+                    }
+                }
+            }
 
+            if (htmlSnapshot) {
                 const jsonLdLawyers = extractLawyersFromJsonLdHtml({ html: htmlSnapshot, pageUrl: request.url });
                 if (jsonLdLawyers.length) {
                     lawyers.push(...jsonLdLawyers);
@@ -636,8 +665,6 @@ try {
                     lawyers.push(...htmlLawyers);
                     extractionSources.add('html');
                 }
-            } catch (err) {
-                log.warning(`HTTP fetch failed, falling back to browser for ${request.url}: ${err.message}`);
             }
 
             // Browser path with network interception
@@ -659,7 +686,14 @@ try {
             await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => { });
             await page.waitForTimeout(randomDelay());
 
-            const browserHtml = await page.content();
+            let browserHtml = await page.content();
+            if (isBlockedHtml(browserHtml)) {
+                log.warning('Detected challenge/blocked page, retrying with extra wait and reload');
+                await page.waitForTimeout(4000);
+                await page.reload({ waitUntil: 'networkidle', timeout: 45000 }).catch(() => { });
+                await page.waitForTimeout(randomDelay());
+                browserHtml = await page.content();
+            }
             if (!htmlSnapshot) htmlSnapshot = browserHtml;
 
             // Parse network payloads first
@@ -713,7 +747,7 @@ try {
                 totalScraped++;
             }
 
-            if (debug && filtered > 0) {
+            if (filtered > 0) {
                 log.debug(`Filtered out ${filtered} duplicate lawyers`);
             }
 
@@ -747,13 +781,14 @@ try {
                 extractedBeforeFilter: lawyers.length,
             });
 
-            if (debug && lawyers.length === 0) {
+            if (debug || lawyers.length === 0) {
                 await Actor.setValue(
-                    `DEBUG_EMPTY_PAGE_${pagesProcessed}`,
+                    `DEBUG_PAGE_${pagesProcessed}`,
                     {
                         url: request.url,
                         title: await page.title(),
-                        htmlSnippet: htmlSnapshot.slice(0, 5000),
+                        htmlSnippet: htmlSnapshot.slice(0, 8000),
+                        isBlocked: isBlockedHtml(htmlSnapshot),
                         timestamp: new Date().toISOString(),
                     },
                     { contentType: 'application/json' }
