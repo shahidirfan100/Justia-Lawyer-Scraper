@@ -641,11 +641,10 @@ try {
         async requestHandler({ request, crawler: selfCrawler, session, proxyInfo }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
-            // Use got-scraping sendRequest with full stealth config
+            // Use got-scraping with full stealth config
             const response = await gotScraping({
                 url: request.url,
                 proxyUrl: proxyInfo.url,
-                sessionToken: session,
                 useHeaderGenerator: true,
                 headerGeneratorOptions: {
                     devices: ['desktop'],
@@ -665,7 +664,6 @@ try {
                         },
                     ],
                 },
-                ignoreHttp2: false,
                 timeout: { request: 45000 },
             });
 
