@@ -310,9 +310,11 @@ try {
     const maxPages = Number.isFinite(input.maxPages) ? input.maxPages : 5;
     const fetchFullProfiles = input.fetchFullProfiles ?? false;
 
-    const proxyConfiguration = await Actor.createProxyConfiguration(
-        input.proxyConfiguration || { useApifyProxy: true }
-    );
+    // Apify-recommended proxy configuration with checkAccess
+    const proxyConfiguration = await Actor.createProxyConfiguration({
+        ...(input.proxyConfiguration || { useApifyProxy: true }),
+        checkAccess: true,
+    });
 
     const searchUrl = (() => {
         if (input.searchUrl && input.searchUrl.trim()) return input.searchUrl.trim();
@@ -324,7 +326,7 @@ try {
         return `${JUSTIA_BASE}/lawyers/${practiceArea}/${location}`;
     })();
 
-    log.info('Starting Justia Lawyer Scraper (Browser-First Mode)', {
+    log.info('Starting Justia Lawyer Scraper (Camoufox Stealth Mode)', {
         searchUrl,
         maxLawyers,
         maxPages,
@@ -339,28 +341,23 @@ try {
     const crawler = new PlaywrightCrawler({
         proxyConfiguration,
         maxRequestsPerCrawl: maxPages > 0 ? maxPages : undefined,
-        maxConcurrency: 4,
-        navigationTimeoutSecs: 45,
+        maxConcurrency: 3,
+        navigationTimeoutSecs: 60,
         requestHandlerTimeoutSecs: 180,
         launchContext: {
             launcher: firefox,
-            launchOptions: async (options) => {
-                const proxyUrl = await proxyConfiguration.newUrl();
-                return camoufoxLaunchOptions({
-                    ...options,
-                    headless: true,
-                    proxy: proxyUrl,
-                    geoip: true,
-                    os: 'windows',
-                    locale: 'en-US',
-                    screen: {
-                        minWidth: 1280,
-                        maxWidth: 1920,
-                        minHeight: 720,
-                        maxHeight: 1080,
-                    },
-                });
-            },
+            launchOptions: await camoufoxLaunchOptions({
+                headless: true,
+                proxy: await proxyConfiguration.newUrl(),
+                geoip: true,
+                os: 'windows',
+                screen: {
+                    minWidth: 1280,
+                    maxWidth: 1920,
+                    minHeight: 720,
+                    maxHeight: 1080,
+                },
+            }),
         },
 
         async requestHandler({ page, request, crawler: selfCrawler }) {
