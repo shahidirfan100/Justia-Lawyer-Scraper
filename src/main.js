@@ -628,6 +628,17 @@ try {
         maxRequestsPerCrawl: maxPages > 0 ? maxPages : undefined,
         maxConcurrency: 10,
         requestHandlerTimeoutSecs: 180,
+        maxRequestRetries: 4,
+        ignoreHttpStatusCode: true,
+        retryOnBlocked: false,
+        blockedStatusCodes: [],
+        useSessionPool: true,
+        persistCookiesPerSession: true,
+        sessionPoolOptions: {
+            sessionOptions: {
+                maxUsageCount: 20,
+            },
+        },
         preNavigationHooks: [
             ({ request }) => {
                 request.headers = {
@@ -637,12 +648,25 @@ try {
             },
         ],
 
-        async requestHandler({ request, $, response, crawler: selfCrawler }) {
+        async requestHandler({ request, $, response, crawler: selfCrawler, session }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
             const headers = buildHeaders();
             const htmlSnapshot = response?.body?.toString() || $.html() || '';
-            const blocked = isBlockedHtml(htmlSnapshot);
+            const statusCode = response?.statusCode;
+            const blocked = statusCode === 403 || isBlockedHtml(htmlSnapshot);
+
+            if (blocked) {
+                log.warning('Blocked or challenge page detected on listing', {
+                    url: request.url,
+                    statusCode,
+                    retryCount: request.retryCount,
+                });
+                if (session) session.retire();
+                if (request.retryCount < 2) {
+                    throw new Error(`Blocked status ${statusCode || 'unknown'}`);
+                }
+            }
 
             let lawyers = [];
             const extractionSources = new Set();
@@ -665,10 +689,6 @@ try {
                     lawyers.push(...htmlLawyers);
                     extractionSources.add('html');
                 }
-            }
-
-            if (blocked) {
-                log.warning('Blocked or challenge page detected on listing', { url: request.url });
             }
 
             // Debug logging before filtering
