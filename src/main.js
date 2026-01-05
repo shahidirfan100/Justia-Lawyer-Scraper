@@ -626,7 +626,7 @@ try {
     const crawler = new CheerioCrawler({
         proxyConfiguration,
         maxRequestsPerCrawl: maxPages > 0 ? maxPages : undefined,
-        maxConcurrency: 10,
+        maxConcurrency: 8,
         requestHandlerTimeoutSecs: 180,
         maxRequestRetries: 4,
         useSessionPool: true,
@@ -637,26 +637,49 @@ try {
                 maxUsageCount: 20,
             },
         },
-        preNavigationHooks: [
-            (_ctx, gotOptions) => {
-                gotOptions.headers = {
-                    ...(gotOptions.headers || {}),
-                    ...buildHeaders(),
-                };
-            },
-        ],
 
-        async requestHandler({ request, $, response, body, crawler: selfCrawler, session }) {
+        async requestHandler({ request, crawler: selfCrawler, session, proxyInfo }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
-            const headers = buildHeaders();
-            const htmlSnapshot =
-                typeof body === 'string'
-                    ? body
-                    : body
-                        ? body.toString()
-                        : $.html() || '';
-            const statusCode = response?.statusCode;
+            // Use got-scraping sendRequest with full stealth config
+            const response = await gotScraping({
+                url: request.url,
+                proxyUrl: proxyInfo.url,
+                sessionToken: session.id,
+                useHeaderGenerator: true,
+                headerGeneratorOptions: {
+                    devices: ['desktop'],
+                    operatingSystems: ['windows'],
+                    browsers: [{ name: 'chrome', minVersion: 120 }],
+                    locales: ['en-US'],
+                },
+                retry: {
+                    limit: 2,
+                    statusCodes: [408, 429, 500, 502, 503, 504],
+                },
+                hooks: {
+                    beforeRequest: [
+                        (opts) => {
+                            opts.headers.referer = opts.url.origin + '/';
+                            return opts;
+                        },
+                    ],
+                },
+                ignoreHttp2: false,
+                timeout: { request: 45000 },
+            });
+
+            // Log proxy and session info on success
+            log.debug('Request successful', {
+                url: request.url,
+                proxyUrl: proxyInfo.url,
+                sessionId: session.id,
+                statusCode: response.statusCode,
+            });
+
+            const htmlSnapshot = response.body?.toString() || '';
+            const $ = cheerio.load(htmlSnapshot);
+            const statusCode = response.statusCode;
             const blocked = statusCode === 403 || isBlockedHtml(htmlSnapshot);
 
             if (blocked) {
