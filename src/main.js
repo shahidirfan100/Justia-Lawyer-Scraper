@@ -1,5 +1,6 @@
 import { Actor, log } from 'apify';
-import { CheerioCrawler, gotScraping } from 'crawlee';
+import { CheerioCrawler } from 'crawlee';
+import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
 
 await Actor.init();
