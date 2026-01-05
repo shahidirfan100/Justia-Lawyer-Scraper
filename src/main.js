@@ -454,38 +454,35 @@ function findNextPageUrl({ html, pageUrl }) {
     return '';
 }
 
-async function fetchHtmlWithGot({ url, proxyConfiguration, headers }) {
+async function fetchHtmlWithGot({ url, proxyConfiguration }) {
     const proxyUrl = await proxyConfiguration.newUrl().catch(() => null);
     try {
         const response = await gotScraping({
             url,
             proxyUrl,
-            headers,
-            timeout: { request: 45000 },
+            useHeaderGenerator: true,
+            headerGeneratorOptions: {
+                devices: ['desktop'],
+                operatingSystems: ['windows'],
+                browsers: [{ name: 'chrome', minVersion: 120 }],
+                locales: ['en-US'],
+            },
+            retry: {
+                limit: 2,
+                statusCodes: [408, 429, 500, 502, 503, 504],
+            },
         });
         return response.body?.toString() || '';
     } catch (err) {
-        log.warning(`Profile fetch failed (proxy) for ${url}: ${err.message}`);
-        if (!proxyUrl) return '';
-    }
-
-    try {
-        const response = await gotScraping({
-            url,
-            headers,
-            timeout: { request: 45000 },
-        });
-        return response.body?.toString() || '';
-    } catch (err) {
-        log.warning(`Profile fetch failed without proxy for ${url}: ${err.message}`);
+        log.debug(`Profile fetch failed for ${url}: ${err.message}`);
         return '';
     }
 }
 
 // Enrich profile with detail page data (HTTP-only)
-async function enrichProfileWithDetailsHttp({ profileUrl, baseData, proxyConfiguration, headers }) {
+async function enrichProfileWithDetailsHttp({ profileUrl, baseData, proxyConfiguration }) {
     try {
-        const html = await fetchHtmlWithGot({ url: profileUrl, proxyConfiguration, headers });
+        const html = await fetchHtmlWithGot({ url: profileUrl, proxyConfiguration });
         if (!html || isBlockedHtml(html)) {
             if (html && isBlockedHtml(html)) {
                 log.warning(`Blocked on profile page, skipping enrichment: ${profileUrl}`);
@@ -787,14 +784,13 @@ try {
                         profileUrl: baseLawyer.website,
                         baseData: baseLawyer,
                         proxyConfiguration,
-                        headers: buildHeaders(),
                     });
                     enriched.push(detailed);
                 }
                 await Actor.pushData(enriched);
             } else if (unique.length) {
                 if (!fetchFullProfiles) {
-                    log.warningOnce(
+                    log.debug(
                         'fetchFullProfiles is disabled, so fields like biography, education, bar admissions, and languages may be empty.'
                     );
                 }
