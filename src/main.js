@@ -1,5 +1,5 @@
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler, requestAsBrowser } from 'crawlee';
+import { PlaywrightCrawler, gotScraping } from 'crawlee';
 import * as cheerio from 'cheerio';
 import { launchOptions as camoufoxLaunchOptions } from 'camoufox-js';
 import { firefox } from 'playwright';
@@ -503,7 +503,7 @@ try {
 
             // Fast path: HTTP fetch with JSON-first parsing
             try {
-                const httpResponse = await requestAsBrowser({
+                const httpResponse = await gotScraping({
                     url: request.url,
                     proxyUrl,
                     headers: commonHeaders,
