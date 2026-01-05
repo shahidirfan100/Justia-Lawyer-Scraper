@@ -794,13 +794,13 @@ try {
             if (debug || lawyers.length === 0) {
                 await Actor.setValue(
                     `DEBUG_PAGE_${pagesProcessed}`,
-                    {
+                    JSON.stringify({
                         url: request.url,
                         title: $('title').first().text().trim() || null,
                         htmlSnippet: htmlSnapshot.slice(0, 8000),
                         isBlocked: blocked,
                         timestamp: new Date().toISOString(),
-                    },
+                    }),
                     { contentType: 'application/json' }
                 );
             }
