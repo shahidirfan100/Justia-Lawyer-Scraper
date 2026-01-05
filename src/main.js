@@ -1,5 +1,5 @@
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler } from 'crawlee';
+import { PlaywrightCrawler, requestAsBrowser } from 'crawlee';
 import * as cheerio from 'cheerio';
 import { launchOptions as camoufoxLaunchOptions } from 'camoufox-js';
 import { firefox } from 'playwright';
@@ -51,6 +51,111 @@ function safeJsonParse(text) {
     } catch {
         return null;
     }
+}
+
+// Extract lawyers from arbitrary API-like JSON payloads (Next.js data, internal APIs)
+function extractLawyersFromApiPayload(payload, pageUrl) {
+    const results = [];
+    const seen = new Set();
+
+    function pushCandidate(node) {
+        const name = node.name || node.fullName || node.title || '';
+        if (!name || name.length < 2) return;
+
+        const profileUrl = absoluteUrl(
+            node.url || node.profileUrl || node.link || node.website || node.permalink,
+            pageUrl,
+        );
+
+        const location =
+            node.location ||
+            node.city ||
+            node.address?.city ||
+            node.address?.addressLocality ||
+            node.address?.region ||
+            node.state ||
+            '';
+
+        const practiceAreas = (() => {
+            const areas = node.practiceAreas || node.specialties || node.categories || node.tags;
+            if (!areas) return '';
+            if (Array.isArray(areas)) return areas.map(String).join(', ');
+            if (typeof areas === 'string') return areas;
+            return '';
+        })();
+
+        const firmName =
+            node.firmName ||
+            node.company ||
+            node.organization ||
+            node.orgName ||
+            node.office ||
+            node.lawFirm ||
+            '';
+
+        const phone =
+            node.phone ||
+            node.telephone ||
+            node.tel ||
+            node.contactPhone ||
+            node.mobile ||
+            (typeof node.contact === 'object' ? node.contact?.phone : '') ||
+            '';
+
+        const email =
+            node.email ||
+            node.mail ||
+            node.contactEmail ||
+            (typeof node.contact === 'object' ? node.contact?.email : '') ||
+            '';
+
+        const dedupKey = `${name}|${profileUrl || node.id || node.slug || location}`;
+        if (seen.has(dedupKey)) return;
+        seen.add(dedupKey);
+
+        results.push({
+            name,
+            firmName,
+            location,
+            address:
+                typeof node.address === 'string'
+                    ? node.address
+                    : node.address?.streetAddress || location || '',
+            phone: phone || '',
+            email: email || '',
+            website: profileUrl,
+            practiceAreas,
+            description: node.description || node.summary || '',
+            yearsLicensed: node.yearsLicensed || node.experience || '',
+            biography: node.biography || node.bio || null,
+            education: node.education || node.schools || null,
+            barAdmissions: node.barAdmissions || node.admissions || null,
+            languages: node.languages || null,
+            scrapedAt: new Date().toISOString(),
+        });
+    }
+
+    function walk(node) {
+        if (!node) return;
+        if (Array.isArray(node)) {
+            for (const item of node) walk(item);
+            return;
+        }
+        if (typeof node !== 'object') return;
+
+        const keys = Object.keys(node).map((k) => k.toLowerCase());
+        const hasName = Boolean(node.name || node.fullName || node.title);
+        const looksLikeLawyer =
+            hasName ||
+            keys.some((k) => k.includes('attorney') || k.includes('lawyer') || k.includes('profile'));
+
+        if (looksLikeLawyer) pushCandidate(node);
+
+        for (const val of Object.values(node)) walk(val);
+    }
+
+    walk(payload);
+    return results;
 }
 
 // Extract lawyers from JSON-LD structured data
@@ -137,6 +242,26 @@ function extractLawyersFromJsonLd(data, pageUrl) {
     }
 
     return results;
+}
+
+function extractLawyersFromJsonLdHtml({ html, pageUrl }) {
+    const $ = cheerio.load(html);
+    const found = [];
+    $('script[type="application/ld+json"]').each((_, el) => {
+        const text = $(el).contents().text();
+        const data = safeJsonParse(text);
+        if (data) found.push(...extractLawyersFromJsonLd(data, pageUrl));
+    });
+    return found;
+}
+
+function extractLawyersFromNextData({ html, pageUrl }) {
+    const $ = cheerio.load(html);
+    const scriptText = $('#__NEXT_DATA__').first().text() || $('script#__NEXT_DATA__').first().text();
+    if (!scriptText) return [];
+    const data = safeJsonParse(scriptText);
+    if (!data) return [];
+    return extractLawyersFromApiPayload(data, pageUrl);
 }
 
 
@@ -363,46 +488,93 @@ try {
         async requestHandler({ page, request, crawler: selfCrawler }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
-            // Navigate with stealth optimizations
-            await page.setExtraHTTPHeaders({
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            const userAgent = randomUserAgent();
+            const commonHeaders = {
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'User-Agent': randomUserAgent(),
-            });
+                'User-Agent': userAgent,
+            };
 
-            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-            await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => { });
-
-            // Random human-like delay
-            await page.waitForTimeout(randomDelay());
-
-            const html = await page.content();
+            const proxyUrl = await proxyConfiguration.newUrl();
 
             let lawyers = [];
-            let extractionMethod = 'none';
+            const extractionSources = new Set();
+            let htmlSnapshot = '';
 
-            // Priority 1: JSON-LD Structured Data
-            const jsonLdScripts = await page.$$('script[type="application/ld+json"]');
-            for (const script of jsonLdScripts) {
-                const jsonText = await script.textContent();
-                const data = safeJsonParse(jsonText);
-                if (data) {
-                    const extracted = extractLawyersFromJsonLd(data, request.url);
-                    if (extracted.length > 0) {
-                        lawyers = extracted;
-                        extractionMethod = 'JSON-LD';
-                        log.info(`Extracted ${lawyers.length} lawyers via JSON-LD`);
-                        break;
-                    }
+            // Fast path: HTTP fetch with JSON-first parsing
+            try {
+                const httpResponse = await requestAsBrowser({
+                    url: request.url,
+                    proxyUrl,
+                    headers: commonHeaders,
+                    timeout: { request: 45000 },
+                });
+                htmlSnapshot = httpResponse.body?.toString() || '';
+
+                const jsonLdLawyers = extractLawyersFromJsonLdHtml({ html: htmlSnapshot, pageUrl: request.url });
+                if (jsonLdLawyers.length) {
+                    lawyers.push(...jsonLdLawyers);
+                    extractionSources.add('jsonld');
+                }
+
+                const nextDataLawyers = extractLawyersFromNextData({ html: htmlSnapshot, pageUrl: request.url });
+                if (nextDataLawyers.length) {
+                    lawyers.push(...nextDataLawyers);
+                    extractionSources.add('next-data');
+                }
+
+                const htmlLawyers = extractListingViaHtml({ html: htmlSnapshot, pageUrl: request.url });
+                if (htmlLawyers.length) {
+                    lawyers.push(...htmlLawyers);
+                    extractionSources.add('html');
+                }
+            } catch (err) {
+                log.warning(`HTTP fetch failed, falling back to browser for ${request.url}: ${err.message}`);
+            }
+
+            // Browser path with network interception
+            const networkPayloads = [];
+            page.on('response', async (response) => {
+                const contentType = response.headers()['content-type'] || '';
+                const url = response.url();
+                if (!contentType.includes('application/json') && !url.includes('__NEXT_DATA__')) return;
+                try {
+                    const data = await response.json();
+                    networkPayloads.push({ url, data });
+                } catch {
+                    // Ignore non-JSON bodies
+                }
+            });
+
+            await page.setExtraHTTPHeaders(commonHeaders);
+            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => { });
+            await page.waitForTimeout(randomDelay());
+
+            const browserHtml = await page.content();
+            if (!htmlSnapshot) htmlSnapshot = browserHtml;
+
+            // Parse network payloads first
+            for (const payload of networkPayloads) {
+                const apiLawyers = extractLawyersFromApiPayload(payload.data, request.url);
+                if (apiLawyers.length) {
+                    lawyers.push(...apiLawyers);
+                    extractionSources.add('api');
                 }
             }
 
-            // Priority 2: HTML Parsing (fallback)
-            if (!lawyers.length) {
-                lawyers = extractListingViaHtml({ html, pageUrl: request.url });
-                if (lawyers.length) {
-                    extractionMethod = 'HTML Parsing';
-                    log.info(`Extracted ${lawyers.length} lawyers via HTML parsing`);
+            // Parse JSON-LD and HTML from browser content if still empty or for enrichment
+            if (lawyers.length === 0) {
+                const browserJsonLd = extractLawyersFromJsonLdHtml({ html: browserHtml, pageUrl: request.url });
+                if (browserJsonLd.length) {
+                    lawyers.push(...browserJsonLd);
+                    extractionSources.add('jsonld');
+                }
+
+                const browserHtmlLawyers = extractListingViaHtml({ html: browserHtml, pageUrl: request.url });
+                if (browserHtmlLawyers.length) {
+                    lawyers.push(...browserHtmlLawyers);
+                    extractionSources.add('html');
                 }
             }
 
@@ -411,7 +583,8 @@ try {
                 log.debug('Raw extracted lawyers:', {
                     count: lawyers.length,
                     sample: lawyers[0],
-                    hasWebsites: lawyers.filter(l => l.website).length,
+                    sources: Array.from(extractionSources),
+                    hasWebsites: lawyers.filter((l) => l.website).length,
                 });
             }
 
@@ -419,7 +592,6 @@ try {
             const unique = [];
             let filtered = 0;
             for (const lawyer of lawyers) {
-                // Generate dedup key: use website if available, otherwise use name+location
                 const dedupKey = lawyer.website || `${lawyer.name}|${lawyer.location}|${lawyer.firmName}`;
 
                 if (seenWebsites.has(dedupKey)) {
@@ -463,25 +635,23 @@ try {
                 page: pagesProcessed,
                 savedThisPage: unique.length,
                 totalScraped,
-                extractionMethod,
+                extractionSources: Array.from(extractionSources),
                 extractedBeforeFilter: lawyers.length,
             });
 
-            // Save debug snapshot if no lawyers found
             if (debug && lawyers.length === 0) {
                 await Actor.setValue(
                     `DEBUG_EMPTY_PAGE_${pagesProcessed}`,
                     {
                         url: request.url,
                         title: await page.title(),
-                        htmlSnippet: html.slice(0, 5000),
+                        htmlSnippet: htmlSnapshot.slice(0, 5000),
                         timestamp: new Date().toISOString(),
                     },
                     { contentType: 'application/json' }
                 );
             }
 
-            // Check if we should continue
             if (maxLawyers > 0 && totalScraped >= maxLawyers) {
                 log.info('Reached maxLawyers limit, stopping');
                 return;
@@ -492,8 +662,7 @@ try {
                 return;
             }
 
-            // Find and enqueue next page
-            const nextUrl = findNextPageUrl({ html, pageUrl: request.url });
+            const nextUrl = findNextPageUrl({ html: htmlSnapshot, pageUrl: request.url });
             if (nextUrl && nextUrl !== request.url) {
                 log.info('Enqueueing next page', { nextUrl });
                 await selfCrawler.addRequests([{ url: nextUrl, uniqueKey: nextUrl }]);

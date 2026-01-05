@@ -10,7 +10,7 @@
     ],
     "meta": {
         "templateId": "justia-lawyer-scraper",
-        "generatedBy": "GPT-5.2"
+        "generatedBy": "gpt-5"
     },
     "input": "./input_schema.json",
     "output": "./output_schema.json",
