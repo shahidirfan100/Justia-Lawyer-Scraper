@@ -222,6 +222,12 @@ function extractLawyersFromJsonLd(data, pageUrl) {
             return item.location || '';
         })();
 
+        const languages = (() => {
+            if (Array.isArray(item.knowsLanguage)) return item.knowsLanguage;
+            if (typeof item.knowsLanguage === 'string') return item.knowsLanguage.split(',').map((s) => s.trim());
+            return null;
+        })();
+
         results.push({
             name: name || 'Unknown Name',
             firmName: item.worksFor?.name || item.affiliation?.name || item.memberOf?.name || '',
@@ -236,7 +242,7 @@ function extractLawyersFromJsonLd(data, pageUrl) {
             biography: null,
             education: null,
             barAdmissions: null,
-            languages: null,
+            languages,
             scrapedAt: new Date().toISOString(),
         });
     }
@@ -274,61 +280,104 @@ function extractListingViaHtml({ html, pageUrl }) {
 
     const candidates = [];
 
-    // Find all profile links
     $('a[href^="/lawyers/"]').each((_, el) => {
         const $a = $(el);
         const href = $a.attr('href') || '';
-
-        // Filter for profile links (not category/search links)
-        const pathParts = href.split('/').filter(p => p);
+        const pathParts = href.split('/').filter((p) => p);
         if (pathParts.length < 2 || !href.includes('/lawyers/')) return;
 
         const profileUrl = absoluteUrl(href, pageUrl);
-        const name = $a.text().trim();
-
-        // Find the containing card/article
-        const $card = $a.closest('article, li, div[class*="listing"], div[class*="card"], div[class*="result"]');
+        const $card = $a.closest(
+            'article, li, .lawyer, .lawyer-card, .profile-card, div[class*="listing"], div[class*="card"], div[class*="result"]',
+        );
         if (!$card.length) return;
 
-        // Extract data from card
-        const firmName = $card.find('.firm-name, [class*="firm"], .law-firm, .organization').first().text().trim();
-        const location = $card.find('.location, [class*="location"], .address, [itemprop="address"]').first().text().trim();
+        const name =
+            $card.find('[itemprop="name"], .lawyer-name, .name, h2, h3').first().text().trim() ||
+            $a.text().trim() ||
+            'Unknown Name';
+
+        const firmName =
+            $card
+                .find(
+                    '[itemprop="worksFor"], .firm-name, .law-firm, .organization, .company, .lawyer-company, [class*="firm"]',
+                )
+                .first()
+                .text()
+                .trim() || '';
+
+        const street = $card.find('[itemprop="streetAddress"]').first().text().trim();
+        const locality = $card.find('[itemprop="addressLocality"], .city, .locality').first().text().trim();
+        const region = $card.find('[itemprop="addressRegion"], .state, .region').first().text().trim();
+        const postal = $card.find('[itemprop="postalCode"]').first().text().trim();
+        const addressParts = [street, locality, region, postal].filter(Boolean);
+        const address = addressParts.join(', ');
+        const location =
+            $card.find('.location, [class*="location"], .address, [itemprop="address"]').first().text().trim() ||
+            [locality, region].filter(Boolean).join(', ') ||
+            address;
 
         const phone = (() => {
             const $tel = $card.find('a[href^="tel:"]').first();
-            return $tel.text().trim() || $tel.attr('href')?.replace('tel:', '').trim() ||
-                $card.find('.phone, [class*="phone"]').first().text().trim();
+            const telText = $tel.text().trim() || $tel.attr('href')?.replace('tel:', '').trim();
+            return telText || $card.find('.phone, [class*="phone"], [itemprop="telephone"]').first().text().trim();
         })();
+
+        const email =
+            $card.find('a[href^="mailto:"]').first().attr('href')?.replace('mailto:', '').trim() ||
+            $card.find('[itemprop="email"]').first().text().trim() ||
+            '';
 
         const practiceAreas = (() => {
             const pieces = [];
-            $card.find('a[href*="-law"], .practice-area, [class*="practice"]').each((_, n) => {
+            $card.find('.practice-areas a, .practice-areas li, .practice-area, [class*="practice"]').each((_, n) => {
                 const t = $(n).text().trim();
                 if (t && t.length > 2 && t.length < 100) pieces.push(t);
             });
             return [...new Set(pieces)].slice(0, 10).join(', ');
         })();
 
+        const description =
+            $card
+                .find('.description, .summary, .lawyer-description, .profile-description, .about')
+                .first()
+                .text()
+                .trim() || '';
+
+        const yearsLicensed = (() => {
+            const text = $card.text();
+            const match = text.match(/Licensed\\s+for\\s+(\\d+)\\s+years?/i);
+            return match ? match[1] : '';
+        })();
+
+        const languages = (() => {
+            const langs = [];
+            $card.find('.languages li, [class*="language"]').each((_, n) => {
+                const t = $(n).text().trim();
+                if (t) langs.push(t);
+            });
+            return langs.length ? langs : null;
+        })();
+
         candidates.push({
-            name: name || 'Unknown Name',
+            name,
             firmName,
             location,
-            address: location,
+            address: address || location,
             phone,
-            email: '',
+            email,
             website: profileUrl,
             practiceAreas,
-            description: '',
-            yearsLicensed: '',
+            description,
+            yearsLicensed,
             biography: null,
             education: null,
             barAdmissions: null,
-            languages: null,
+            languages,
             scrapedAt: new Date().toISOString(),
         });
     });
 
-    // De-dupe by website
     const seen = new Set();
     const lawyers = candidates.filter((r) => {
         const key = r.website;
@@ -390,7 +439,10 @@ async function enrichProfileWithDetails({ page, profileUrl, baseData }) {
         const html = await page.content();
         const $ = cheerio.load(html);
 
-        const email = $('a[href^="mailto:"]').first().attr('href')?.replace('mailto:', '').trim() || null;
+        const email =
+            $('a[href^="mailto:"]').first().attr('href')?.replace('mailto:', '').trim() ||
+            $('[itemprop="email"]').first().text().trim() ||
+            null;
 
         const biography = $('.biography, #biography, [class*="bio"], .profile-description, .about').first().text().trim() || null;
 
@@ -412,13 +464,69 @@ async function enrichProfileWithDetails({ page, profileUrl, baseData }) {
             if (t) languages.push(t);
         });
 
+        const practiceAreas = (() => {
+            const pieces = [];
+            $('.practice-areas a, .practice-areas li, .practice-area, [class*="practice"]').each((_, el) => {
+                const t = $(el).text().trim();
+                if (t && t.length > 2 && t.length < 100) pieces.push(t);
+            });
+            return [...new Set(pieces)].slice(0, 10).join(', ');
+        })();
+
+        const firmName =
+            $('[itemprop="worksFor"], .firm-name, .law-firm, .organization, .company, .lawyer-company, [class*="firm"]')
+                .first()
+                .text()
+                .trim() || baseData.firmName;
+
+        const phone =
+            $('a[href^="tel:"]').first().text().trim() ||
+            $('a[href^="tel:"]').first().attr('href')?.replace('tel:', '').trim() ||
+            $('[itemprop="telephone"]').first().text().trim() ||
+            baseData.phone;
+
+        const street = $('[itemprop="streetAddress"]').first().text().trim();
+        const locality = $('[itemprop="addressLocality"], .city, .locality').first().text().trim();
+        const region = $('[itemprop="addressRegion"], .state, .region').first().text().trim();
+        const postal = $('[itemprop="postalCode"]').first().text().trim();
+        const addressParts = [street, locality, region, postal].filter(Boolean);
+        const address = addressParts.join(', ') || baseData.address;
+        const location =
+            $('[class*="location"], .address, [itemprop="address"]').first().text().trim() ||
+            [locality, region].filter(Boolean).join(', ') ||
+            baseData.location;
+
+        const yearsLicensed = (() => {
+            const text = $('body').text();
+            const match = text.match(/Licensed\\s+for\\s+(\\d+)\\s+years?/i);
+            return match ? match[1] : baseData.yearsLicensed;
+        })();
+
+        const ldLawyers = extractLawyersFromJsonLdHtml({ html, pageUrl: profileUrl });
+        const ld = ldLawyers[0];
+
+        const mergedPractice = practiceAreas || ld?.practiceAreas || baseData.practiceAreas;
+        const mergedAddress = address || ld?.address || baseData.address;
+        const mergedLocation = location || ld?.location || baseData.location;
+        const mergedPhone = phone || ld?.phone || baseData.phone;
+        const mergedEmail = email || ld?.email || baseData.email;
+        const mergedFirm = firmName || ld?.firmName || baseData.firmName;
+        const mergedDesc = biography || ld?.description || baseData.description;
+
         return {
             ...baseData,
-            email: email || baseData.email,
-            biography: biography || baseData.biography,
-            education: education.length ? education : baseData.education,
-            barAdmissions: barAdmissions.length ? barAdmissions : baseData.barAdmissions,
-            languages: languages.length ? languages : baseData.languages,
+            email: mergedEmail || baseData.email,
+            phone: mergedPhone,
+            firmName: mergedFirm,
+            address: mergedAddress,
+            location: mergedLocation,
+            practiceAreas: mergedPractice,
+            description: mergedDesc || baseData.description,
+            yearsLicensed,
+            biography: biography || ld?.biography || baseData.biography,
+            education: education.length ? education : ld?.education || baseData.education,
+            barAdmissions: barAdmissions.length ? barAdmissions : ld?.barAdmissions || baseData.barAdmissions,
+            languages: languages.length ? languages : ld?.languages || baseData.languages,
         };
     } catch (err) {
         log.warning(`Failed to enrich profile ${profileUrl}:`, err.message);

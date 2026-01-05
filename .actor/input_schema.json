@@ -46,7 +46,7 @@
             "title": "Fetch Full Profiles",
             "type": "boolean",
             "description": "Whether to visit each lawyer's detail page to extract additional information (biography, education, bar admissions, languages). This will increase scraping time but provides more comprehensive data.",
-            "default": false
+            "default": true
         },
         "debug": {
             "title": "Debug Mode",
