@@ -1,8 +1,6 @@
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler, gotScraping } from 'crawlee';
+import { CheerioCrawler, gotScraping } from 'crawlee';
 import * as cheerio from 'cheerio';
-import { launchOptions as camoufoxLaunchOptions } from 'camoufox-js';
-import { firefox } from 'playwright';
 
 await Actor.init();
 
@@ -23,6 +21,14 @@ function randomUserAgent() {
 
 function randomDelay() {
     return Math.floor(Math.random() * 1000) + 500; // 500-1500ms
+}
+
+function buildHeaders() {
+    return {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'User-Agent': randomUserAgent(),
+    };
 }
 
 function toSlug(value) {
@@ -442,13 +448,45 @@ function findNextPageUrl({ html, pageUrl }) {
     return '';
 }
 
-// Enrich profile with detail page data
-async function enrichProfileWithDetails({ page, profileUrl, baseData }) {
+async function fetchHtmlWithGot({ url, proxyConfiguration, headers }) {
+    const proxyUrl = await proxyConfiguration.newUrl().catch(() => null);
     try {
-        await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForLoadState('domcontentloaded').catch(() => { });
+        const response = await gotScraping({
+            url,
+            proxyUrl,
+            headers,
+            timeout: { request: 45000 },
+        });
+        return response.body?.toString() || '';
+    } catch (err) {
+        log.warning(`Profile fetch failed (proxy) for ${url}: ${err.message}`);
+        if (!proxyUrl) return '';
+    }
 
-        const html = await page.content();
+    try {
+        const response = await gotScraping({
+            url,
+            headers,
+            timeout: { request: 45000 },
+        });
+        return response.body?.toString() || '';
+    } catch (err) {
+        log.warning(`Profile fetch failed without proxy for ${url}: ${err.message}`);
+        return '';
+    }
+}
+
+// Enrich profile with detail page data (HTTP-only)
+async function enrichProfileWithDetailsHttp({ profileUrl, baseData, proxyConfiguration, headers }) {
+    try {
+        const html = await fetchHtmlWithGot({ url: profileUrl, proxyConfiguration, headers });
+        if (!html || isBlockedHtml(html)) {
+            if (html && isBlockedHtml(html)) {
+                log.warning(`Blocked on profile page, skipping enrichment: ${profileUrl}`);
+            }
+            return baseData;
+        }
+
         const $ = cheerio.load(html);
 
         const email =
@@ -456,7 +494,8 @@ async function enrichProfileWithDetails({ page, profileUrl, baseData }) {
             $('[itemprop="email"]').first().text().trim() ||
             null;
 
-        const biography = $('.biography, #biography, [class*="bio"], .profile-description, .about').first().text().trim() || null;
+        const biography =
+            $('.biography, #biography, [class*="bio"], .profile-description, .about').first().text().trim() || null;
 
         const education = [];
         $('.education li, [class*="education"] li, .education-list li').each((_, el) => {
@@ -553,7 +592,7 @@ try {
     const debug = input.debug ?? false;
     const maxLawyers = Number.isFinite(input.maxLawyers) ? input.maxLawyers : 50;
     const maxPages = Number.isFinite(input.maxPages) ? input.maxPages : 5;
-    const fetchFullProfiles = input.fetchFullProfiles ?? false;
+    const fetchFullProfiles = input.fetchFullProfiles ?? true;
 
     // Apify-recommended proxy configuration with checkAccess
     const proxyConfiguration = await Actor.createProxyConfiguration({
@@ -571,7 +610,7 @@ try {
         return `${JUSTIA_BASE}/lawyers/${practiceArea}/${location}`;
     })();
 
-    log.info('Starting Justia Lawyer Scraper (Camoufox Stealth Mode)', {
+    log.info('Starting Justia Lawyer Scraper (HTTP mode: got-scraping)', {
         searchUrl,
         maxLawyers,
         maxPages,
@@ -583,69 +622,29 @@ try {
     let totalScraped = 0;
     let pagesProcessed = 0;
 
-    const crawler = new PlaywrightCrawler({
+    const crawler = new CheerioCrawler({
         proxyConfiguration,
         maxRequestsPerCrawl: maxPages > 0 ? maxPages : undefined,
-        maxConcurrency: 3,
-        navigationTimeoutSecs: 60,
+        maxConcurrency: 10,
         requestHandlerTimeoutSecs: 180,
-        launchContext: {
-            launcher: firefox,
-            launchOptions: await camoufoxLaunchOptions({
-                headless: true,
-                proxy: await proxyConfiguration.newUrl(),
-                geoip: true,
-                os: 'windows',
-                screen: {
-                    minWidth: 1280,
-                    maxWidth: 1920,
-                    minHeight: 720,
-                    maxHeight: 1080,
-                },
-            }),
-        },
+        preNavigationHooks: [
+            ({ request }) => {
+                request.headers = {
+                    ...(request.headers || {}),
+                    ...buildHeaders(),
+                };
+            },
+        ],
 
-        async requestHandler({ page, request, crawler: selfCrawler }) {
+        async requestHandler({ request, $, response, crawler: selfCrawler }) {
             log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
-            const userAgent = randomUserAgent();
-            const commonHeaders = {
-                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'User-Agent': userAgent,
-            };
-
-            const proxyUrl = await proxyConfiguration.newUrl().catch(() => null);
+            const headers = buildHeaders();
+            const htmlSnapshot = response?.body?.toString() || $.html() || '';
+            const blocked = isBlockedHtml(htmlSnapshot);
 
             let lawyers = [];
             const extractionSources = new Set();
-            let htmlSnapshot = '';
-
-            // Fast path: HTTP fetch with JSON-first parsing
-            try {
-                const httpResponse = await gotScraping({
-                    url: request.url,
-                    proxyUrl,
-                    headers: commonHeaders,
-                    timeout: { request: 45000 },
-                });
-                htmlSnapshot = httpResponse.body?.toString() || '';
-            } catch (err) {
-                log.warning(`HTTP fetch failed (proxy) for ${request.url}: ${err.message}`);
-                if (proxyUrl) {
-                    try {
-                        const httpResponseNoProxy = await gotScraping({
-                            url: request.url,
-                            headers: commonHeaders,
-                            timeout: { request: 45000 },
-                        });
-                        htmlSnapshot = httpResponseNoProxy.body?.toString() || '';
-                        log.info('HTTP fetch without proxy succeeded after proxy failure');
-                    } catch (err2) {
-                        log.warning(`HTTP fetch failed without proxy for ${request.url}: ${err2.message}`);
-                    }
-                }
-            }
 
             if (htmlSnapshot) {
                 const jsonLdLawyers = extractLawyersFromJsonLdHtml({ html: htmlSnapshot, pageUrl: request.url });
@@ -667,57 +666,8 @@ try {
                 }
             }
 
-            // Browser path with network interception
-            const networkPayloads = [];
-            page.on('response', async (response) => {
-                const contentType = response.headers()['content-type'] || '';
-                const url = response.url();
-                if (!contentType.includes('application/json') && !url.includes('__NEXT_DATA__')) return;
-                try {
-                    const data = await response.json();
-                    networkPayloads.push({ url, data });
-                } catch {
-                    // Ignore non-JSON bodies
-                }
-            });
-
-            await page.setExtraHTTPHeaders(commonHeaders);
-            await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-            await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => { });
-            await page.waitForTimeout(randomDelay());
-
-            let browserHtml = await page.content();
-            if (isBlockedHtml(browserHtml)) {
-                log.warning('Detected challenge/blocked page, retrying with extra wait and reload');
-                await page.waitForTimeout(4000);
-                await page.reload({ waitUntil: 'networkidle', timeout: 45000 }).catch(() => { });
-                await page.waitForTimeout(randomDelay());
-                browserHtml = await page.content();
-            }
-            if (!htmlSnapshot) htmlSnapshot = browserHtml;
-
-            // Parse network payloads first
-            for (const payload of networkPayloads) {
-                const apiLawyers = extractLawyersFromApiPayload(payload.data, request.url);
-                if (apiLawyers.length) {
-                    lawyers.push(...apiLawyers);
-                    extractionSources.add('api');
-                }
-            }
-
-            // Parse JSON-LD and HTML from browser content if still empty or for enrichment
-            if (lawyers.length === 0) {
-                const browserJsonLd = extractLawyersFromJsonLdHtml({ html: browserHtml, pageUrl: request.url });
-                if (browserJsonLd.length) {
-                    lawyers.push(...browserJsonLd);
-                    extractionSources.add('jsonld');
-                }
-
-                const browserHtmlLawyers = extractListingViaHtml({ html: browserHtml, pageUrl: request.url });
-                if (browserHtmlLawyers.length) {
-                    lawyers.push(...browserHtmlLawyers);
-                    extractionSources.add('html');
-                }
+            if (blocked) {
+                log.warning('Blocked or challenge page detected on listing', { url: request.url });
             }
 
             // Debug logging before filtering
@@ -759,15 +709,22 @@ try {
                         enriched.push(baseLawyer);
                         continue;
                     }
-                    const detailed = await enrichProfileWithDetails({
-                        page,
+                    await new Promise((resolve) => setTimeout(resolve, randomDelay()));
+                    const detailed = await enrichProfileWithDetailsHttp({
                         profileUrl: baseLawyer.website,
                         baseData: baseLawyer,
+                        proxyConfiguration,
+                        headers: buildHeaders(),
                     });
                     enriched.push(detailed);
                 }
                 await Actor.pushData(enriched);
             } else if (unique.length) {
+                if (!fetchFullProfiles) {
+                    log.warningOnce(
+                        'fetchFullProfiles is disabled, so fields like biography, education, bar admissions, and languages may be empty.'
+                    );
+                }
                 await Actor.pushData(unique);
             }
 
@@ -786,9 +743,9 @@ try {
                     `DEBUG_PAGE_${pagesProcessed}`,
                     {
                         url: request.url,
-                        title: await page.title(),
+                        title: $('title').first().text().trim() || null,
                         htmlSnippet: htmlSnapshot.slice(0, 8000),
-                        isBlocked: isBlockedHtml(htmlSnapshot),
+                        isBlocked: blocked,
                         timestamp: new Date().toISOString(),
                     },
                     { contentType: 'application/json' }
