@@ -645,7 +645,7 @@ try {
             const response = await gotScraping({
                 url: request.url,
                 proxyUrl: proxyInfo.url,
-                sessionToken: session.id,
+                sessionToken: session,
                 useHeaderGenerator: true,
                 headerGeneratorOptions: {
                     devices: ['desktop'],
