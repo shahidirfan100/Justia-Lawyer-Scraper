@@ -294,108 +294,113 @@ function extractLawyersFromNextData({ html, pageUrl }) {
 function extractListingViaHtml({ html, pageUrl }) {
     const $ = cheerio.load(html);
 
-    const allLawyerLinks = $('a[href^="/lawyers/"]').length;
+    // Justia uses .jld-card for lawyer listing cards and /lawyer/ (singular) for profile links
+    const allLawyerLinks = $('a[href*="/lawyer/"]').length;
     log.debug(`HTML extraction: found ${allLawyerLinks} total lawyer links`);
 
     const candidates = [];
 
-    $('a[href^="/lawyers/"]').each((_, el) => {
-        const $a = $(el);
-        const href = $a.attr('href') || '';
-        const pathParts = href.split('/').filter((p) => p);
-        if (pathParts.length < 2 || !href.includes('/lawyers/')) return;
+    // Primary extraction using .jld-card containers
+    $('.jld-card').each((_, cardEl) => {
+        const $card = $(cardEl);
 
+        // Find profile link - Justia uses /lawyer/ (singular)
+        const $nameLink = $card.find('a[href*="/lawyer/"][title]').first();
+        if (!$nameLink.length) return;
+
+        const href = $nameLink.attr('href') || '';
         const profileUrl = absoluteUrl(href, pageUrl);
-        const $card = $a.closest(
-            'article, li, .lawyer, .lawyer-card, .profile-card, div[class*="listing"], div[class*="card"], div[class*="result"]',
-        );
-        if (!$card.length) return;
+        const name = $nameLink.attr('title') || $nameLink.text().trim() || 'Unknown Name';
 
-        const name =
-            $card.find('[itemprop="name"], .lawyer-name, .name, h2, h3').first().text().trim() ||
-            $a.text().trim() ||
-            'Unknown Name';
+        // Phone number
+        const $phoneLink = $card.find('a[href^="tel:"]').first();
+        const phone = $phoneLink.text().trim() || $phoneLink.attr('href')?.replace('tel:', '').trim() || '';
 
-        const firmName =
-            $card
-                .find(
-                    '[itemprop="worksFor"], .firm-name, .law-firm, .organization, .company, .lawyer-company, [class*="firm"]',
-                )
-                .first()
-                .text()
-                .trim() || '';
-
-        const street = $card.find('[itemprop="streetAddress"]').first().text().trim();
-        const locality = $card.find('[itemprop="addressLocality"], .city, .locality').first().text().trim();
-        const region = $card.find('[itemprop="addressRegion"], .state, .region').first().text().trim();
-        const postal = $card.find('[itemprop="postalCode"]').first().text().trim();
-        const addressParts = [street, locality, region, postal].filter(Boolean);
-        const address = addressParts.join(', ');
-        const location =
-            $card.find('.location, [class*="location"], .address, [itemprop="address"]').first().text().trim() ||
-            [locality, region].filter(Boolean).join(', ') ||
-            address;
-
-        const phone = (() => {
-            const $tel = $card.find('a[href^="tel:"]').first();
-            const telText = $tel.text().trim() || $tel.attr('href')?.replace('tel:', '').trim();
-            return telText || $card.find('.phone, [class*="phone"], [itemprop="telephone"]').first().text().trim();
-        })();
-
-        const email =
-            $card.find('a[href^="mailto:"]').first().attr('href')?.replace('mailto:', '').trim() ||
-            $card.find('[itemprop="email"]').first().text().trim() ||
-            '';
-
-        const practiceAreas = (() => {
-            const pieces = [];
-            $card.find('.practice-areas a, .practice-areas li, .practice-area, [class*="practice"]').each((_, n) => {
-                const t = $(n).text().trim();
-                if (t && t.length > 2 && t.length < 100) pieces.push(t);
+        // Location - look for City, ST pattern in spans
+        const location = (() => {
+            let loc = '';
+            $card.find('span').each((_, el) => {
+                const text = $(el).text().trim();
+                // Match pattern like "Los Angeles, CA" or "San Francisco, CA"
+                if (/^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?,\s*[A-Z]{2}$/.test(text)) {
+                    loc = text;
+                    return false; // break
+                }
             });
-            return [...new Set(pieces)].slice(0, 10).join(', ');
+            return loc || $card.find('span.nowrap').first().text().trim() || '';
         })();
 
-        const description =
-            $card
-                .find('.description, .summary, .lawyer-description, .profile-description, .about')
-                .first()
-                .text()
-                .trim() || '';
+        // Description/bio snippet
+        const description = $card.find('.description, .bio, p').first().text().trim() || '';
 
-        const yearsLicensed = (() => {
-            const text = $card.text();
-            const match = text.match(/Licensed\\s+for\\s+(\\d+)\\s+years?/i);
-            return match ? match[1] : '';
-        })();
-
-        const languages = (() => {
-            const langs = [];
-            $card.find('.languages li, [class*="language"]').each((_, n) => {
-                const t = $(n).text().trim();
-                if (t) langs.push(t);
+        // Firm name - look for patterns in text
+        const firmName = (() => {
+            let firm = '';
+            $card.find('span, div, p').each((_, el) => {
+                const text = $(el).text().trim();
+                if (/Law Office|Law Group|LLP|PC|Firm|Attorney/i.test(text) && text.length < 200) {
+                    firm = text;
+                    return false; // break
+                }
             });
-            return langs.length ? langs : null;
+            return firm;
         })();
 
         candidates.push({
             name,
             firmName,
             location,
-            address: address || location,
+            address: location,
             phone,
-            email,
+            email: '',
             website: profileUrl,
-            practiceAreas,
+            practiceAreas: '',
             description,
-            yearsLicensed,
+            yearsLicensed: '',
             biography: null,
             education: null,
             barAdmissions: null,
-            languages,
+            languages: null,
             scrapedAt: new Date().toISOString(),
         });
     });
+
+    // Fallback: if no .jld-card found, try finding any lawyer links
+    if (candidates.length === 0) {
+        log.debug('No .jld-card found, trying fallback extraction');
+        $('a[href*="/lawyer/"]').each((_, el) => {
+            const $a = $(el);
+            const href = $a.attr('href') || '';
+            if (!href || href.includes('/lawyers/') || href.includes('#')) return; // skip non-profile links
+
+            const profileUrl = absoluteUrl(href, pageUrl);
+            const name = $a.attr('title') || $a.text().trim() || 'Unknown Name';
+            if (name.length < 2 || name.length > 100) return;
+
+            // Try to find parent container
+            const $card = $a.closest('article, li, div[class*="card"], div[class*="listing"], div[class*="result"]');
+
+            const phone = $card.find('a[href^="tel:"]').first().text().trim() || '';
+
+            candidates.push({
+                name,
+                firmName: '',
+                location: '',
+                address: '',
+                phone,
+                email: '',
+                website: profileUrl,
+                practiceAreas: '',
+                description: '',
+                yearsLicensed: '',
+                biography: null,
+                education: null,
+                barAdmissions: null,
+                languages: null,
+                scrapedAt: new Date().toISOString(),
+            });
+        });
+    }
 
     const seen = new Set();
     const lawyers = candidates.filter((r) => {
@@ -704,6 +709,21 @@ try {
             const extractionSources = new Set();
 
             if (htmlSnapshot) {
+                // Enhanced debug logging for extraction diagnosis
+                const $debug = cheerio.load(htmlSnapshot);
+                const jldCardCount = $debug('.jld-card').length;
+                const lawyerLinksCount = $debug('a[href*="/lawyer/"]').length;
+                const pageTitle = $debug('title').first().text().trim();
+
+                log.info('Page content analysis', {
+                    htmlLength: htmlSnapshot.length,
+                    jldCardCount,
+                    lawyerLinksCount,
+                    pageTitle: pageTitle.slice(0, 100),
+                    hasBody: htmlSnapshot.includes('<body'),
+                    isBlocked: blocked,
+                });
+
                 const jsonLdLawyers = extractLawyersFromJsonLdHtml({ html: htmlSnapshot, pageUrl: request.url });
                 if (jsonLdLawyers.length) {
                     lawyers.push(...jsonLdLawyers);
