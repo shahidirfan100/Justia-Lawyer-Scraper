@@ -629,6 +629,7 @@ try {
         maxConcurrency: 8,
         requestHandlerTimeoutSecs: 180,
         maxRequestRetries: 4,
+        navigationTimeoutSecs: 45,
         useSessionPool: true,
         persistCookiesPerSession: true,
         sessionPoolOptions: {
@@ -637,47 +638,54 @@ try {
                 maxUsageCount: 20,
             },
         },
-
-        async requestHandler({ request, crawler: selfCrawler, session, proxyInfo }) {
-            log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
-
-            // Use got-scraping with full stealth config
-            const response = await gotScraping({
-                url: request.url,
-                proxyUrl: proxyInfo.url,
-                useHeaderGenerator: true,
-                headerGeneratorOptions: {
+        // Stealth configuration via preNavigationHooks (Apify recommended)
+        preNavigationHooks: [
+            async (crawlingContext, gotOptions) => {
+                const { session, request } = crawlingContext;
+                // Full stealth config for got-scraping
+                gotOptions.headerGeneratorOptions = {
                     devices: ['desktop'],
                     operatingSystems: ['windows'],
                     browsers: [{ name: 'chrome', minVersion: 120 }],
                     locales: ['en-US'],
-                },
-                retry: {
+                };
+                gotOptions.useHeaderGenerator = true;
+                gotOptions.sessionToken = session;
+                gotOptions.retry = {
                     limit: 2,
                     statusCodes: [408, 429, 500, 502, 503, 504],
-                },
-                hooks: {
-                    beforeRequest: [
-                        (opts) => {
-                            opts.headers.referer = opts.url.origin + '/';
-                            return opts;
-                        },
-                    ],
-                },
-                timeout: { request: 45000 },
-            });
+                };
+                // Set referer header
+                try {
+                    const urlObj = new URL(request.url);
+                    gotOptions.headers = {
+                        ...(gotOptions.headers || {}),
+                        referer: urlObj.origin + '/',
+                    };
+                } catch {
+                    // Ignore URL parsing errors
+                }
+            },
+        ],
+
+        async requestHandler({ request, $, response, body, crawler: selfCrawler, session, proxyInfo }) {
+            log.info(`Processing page ${pagesProcessed + 1}`, { url: request.url });
 
             // Log proxy and session info on success
             log.debug('Request successful', {
                 url: request.url,
-                proxyUrl: proxyInfo.url,
-                sessionId: session.id,
-                statusCode: response.statusCode,
+                proxyUrl: proxyInfo?.url,
+                sessionId: session?.id,
+                statusCode: response?.statusCode,
             });
 
-            const htmlSnapshot = response.body?.toString() || '';
-            const $ = cheerio.load(htmlSnapshot);
-            const statusCode = response.statusCode;
+            const htmlSnapshot =
+                typeof body === 'string'
+                    ? body
+                    : body
+                        ? body.toString()
+                        : $.html() || '';
+            const statusCode = response?.statusCode;
             const blocked = statusCode === 403 || isBlockedHtml(htmlSnapshot);
 
             if (blocked) {
